@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 
-# Import useful packages
 import rospy
 import cv2 as cv
 import numpy as np
@@ -23,7 +22,7 @@ class ImageConverter:
         # Initializes ROS subscriber to listen for messages of type Image and call image_callback
         self.image_subscriber = rospy.Subscriber('/R1/pi_camera/image_raw', Image, self.image_callback)
 
-        # FOR TESTING
+        # Publishers for testing various transformed images
         # self.hsv_image_publisher = rospy.Publisher('/R1/hsv_image', Image, queue_size=1)
         # self.binary_mask_publisher = rospy.Publisher('/R1/binary_mask', Image, queue_size=1)
 
@@ -60,7 +59,6 @@ class ImageConverter:
         # Send a zero velocity command to stop the robot
         self.velocity_publisher.publish(Twist())
         rospy.loginfo("Published zero velocity command")
-
         # Publish the message to stop the timer
         self.score_tracker_publisher.publish(String('1W3B,password,-1,STOP'))
         rospy.loginfo("Timer stopped")
@@ -71,9 +69,7 @@ class ImageConverter:
         rospy.loginfo("Shutting down...")
 
     def image_callback(self, image_data):
-        """
-        Callback function for image processing.
-        """
+        """ Callback function for image processing."""
 
         # Tries to convert ROS image message to OpenCV format, returns error if not
         try:
@@ -95,24 +91,6 @@ class ImageConverter:
         
         # Finds extreme external contours in the binary image
         contours, _ = cv.findContours(binary_mask, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
-
-        # if contours:
-        #     largest_contour = max(contours, key=cv.contourArea)
-        #     # Approximates the size of the smallest rectangle within the contour
-        #     x, _, w, _ = cv.boundingRect(largest_contour)
-
-        #     # Calculates the midpoint of the lane using the top-left coordinate and the width of the rectangle
-        #     # lane_center_x = int(x + w / 2)
-        #     lane_center_x = x + w // 2
-
-        #     # Calculates angular velocity based on the position of the lane center with respect to the camera
-        #     angular_velocity = self.angular_velocity_multiplier * (cv_image.shape[1] / 2 - lane_center_x)
-
-        #     # Updates velocities and publishes the Twist message to the robot
-        #     movement_command = Twist()
-        #     movement_command.linear.x = self.linear_velocity_setting
-        #     movement_command.angular.z = angular_velocity
-        #     self.velocity_publisher.publish(movement_command)
 
         # Loops through each sizable contour
         for contour in [c for c in contours if cv.contourArea(c) > 1]:
@@ -142,7 +120,7 @@ def main():
         rospy.spin()
 
     except KeyboardInterrupt:
-        # This block allows the node to be shut down with Ctrl+C from the command line.
+        # This block allows the node to be shut down with Ctrl+C from the command line
         rospy.signal_shutdown('KeyboardInterrupt')
         raise
 
