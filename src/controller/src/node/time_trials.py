@@ -24,8 +24,8 @@ class ImageConverter:
         self.image_subscriber = rospy.Subscriber('/R1/pi_camera/image_raw', Image, self.image_callback)
 
         # FOR TESTING
-        self.hsv_image_publisher = rospy.Publisher('/R1/hsv_image', Image, queue_size=1)
-        self.binary_mask_publisher = rospy.Publisher('/R1/binary_mask', Image, queue_size=1)
+        # self.hsv_image_publisher = rospy.Publisher('/R1/hsv_image', Image, queue_size=1)
+        # self.binary_mask_publisher = rospy.Publisher('/R1/binary_mask', Image, queue_size=1)
 
         # self.clock_subscriber = rospy.Subscriber('/clock', )
         
@@ -36,8 +36,7 @@ class ImageConverter:
         self.score_tracker_publisher = rospy.Publisher('/score_tracker', String, queue_size=1)
         
         # Settings for upper and lower thresholds in HSV for the binary mask
-        self.lower_color_threshold = np.array([0, 0, 40])
-        self.upper_color_threshold = np.array([180, 50, 200])
+        self.color_thresholds = (np.array([0, 0, 40]), np.array([180, 50, 200]))
         
         # Parameters for linear velocity and an angular velocity factor (for turning)
         self.linear_velocity_setting = rospy.get_param('~linear_velocity', 0.5)
@@ -51,7 +50,7 @@ class ImageConverter:
         # Publish the message to start the timer
         self.score_tracker_publisher.publish(String('1W3B,password,0,START'))
         self.timer = rospy.Timer(rospy.Duration(duration), self.stop_timer_callback, oneshot=True)
-        rospy.loginfo("Timer started for {} seconds".format(duration))
+        rospy.loginfo(f"Timer started for {duration} seconds")
 
     def stop_timer_callback(self, event):
         # This method will be called when the timer expires
@@ -83,22 +82,37 @@ class ImageConverter:
             rospy.logerr(error)
             return
 
-        # Extracts original image's height and width
-        image_height, image_width = cv_image.shape[:2]
-
         # Crops the HSV image to the bottom 25% of the screen
-        cropped_image = cv_image[int(image_height * 0.75):, :, :]
+        cropped_image = cv_image[int(cv_image.shape[0] * 0.75):, :, :] # cv_image.shape[0] is height
 
         # Converts the image from the camera from BGR to HSV format
         hsv_image = cv.cvtColor(cropped_image, cv.COLOR_BGR2HSV)
-        self.hsv_image_publisher.publish(self.bridge.cv2_to_imgmsg(hsv_image, "bgr8"))
+        # self.hsv_image_publisher.publish(self.bridge.cv2_to_imgmsg(hsv_image, "bgr8")) # Testing
 
         # Applies a binary mask to the cropped image in accordance with the color thresholds
-        binary_mask = cv.inRange(hsv_image, self.lower_color_threshold, self.upper_color_threshold)
-        self.binary_mask_publisher.publish(self.bridge.cv2_to_imgmsg(binary_mask, "mono8"))
+        binary_mask = cv.inRange(hsv_image, self.color_thresholds[0], self.color_thresholds[1])
+        # self.binary_mask_publisher.publish(self.bridge.cv2_to_imgmsg(binary_mask, "mono8")) # Testing
         
         # Finds extreme external contours in the binary image
         contours, _ = cv.findContours(binary_mask, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
+
+        # if contours:
+        #     largest_contour = max(contours, key=cv.contourArea)
+        #     # Approximates the size of the smallest rectangle within the contour
+        #     x, _, w, _ = cv.boundingRect(largest_contour)
+
+        #     # Calculates the midpoint of the lane using the top-left coordinate and the width of the rectangle
+        #     # lane_center_x = int(x + w / 2)
+        #     lane_center_x = x + w // 2
+
+        #     # Calculates angular velocity based on the position of the lane center with respect to the camera
+        #     angular_velocity = self.angular_velocity_multiplier * (cv_image.shape[1] / 2 - lane_center_x)
+
+        #     # Updates velocities and publishes the Twist message to the robot
+        #     movement_command = Twist()
+        #     movement_command.linear.x = self.linear_velocity_setting
+        #     movement_command.angular.z = angular_velocity
+        #     self.velocity_publisher.publish(movement_command)
 
         # Loops through each sizable contour
         for contour in [c for c in contours if cv.contourArea(c) > 1]:
@@ -110,7 +124,7 @@ class ImageConverter:
             lane_center_x = int(x + w / 2)
 
             # Calculates angular velocity based on the position of the lane center with respect to the camera
-            angular_velocity = self.angular_velocity_multiplier * (image_width / 2 - lane_center_x)
+            angular_velocity = self.angular_velocity_multiplier * (cv_image.shape[1] / 2 - lane_center_x)
 
             # Updates velocities and publishes the Twist message to the robot
             movement_command = Twist()
