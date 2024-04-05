@@ -14,7 +14,7 @@ class ImageConverter:
     It detects objects of a specific color range and controls the robot's movement.
     """
 
-    def __init__(self):
+    def __init__(self, duration):
 
         # Creates CvBridge instance to convert ROS image message to OpenCV format
         self.bridge = CvBridge()
@@ -41,11 +41,16 @@ class ImageConverter:
         self.linear_velocity_setting = rospy.get_param('~linear_velocity', 0.5)
         self.angular_velocity_multiplier = rospy.get_param('~angular_velocity_factor', 0.04)
 
+        # Small delay to ensure everything is initialized properly
+        rospy.sleep(1)
+
+        # Now that node is set up, start the timer
+        self.start_timer(duration)
+        
         # Confirms initialization on the terminal
         rospy.loginfo("Time_Trials initialized")
 
     def start_timer(self, duration):
-        rospy.sleep(0.25) # Small delay to ensure everything is initialized properly
         # Publish the message to start the timer
         self.score_tracker_publisher.publish(String('1W3B,password,0,START'))
         self.timer = rospy.Timer(rospy.Duration(duration), self.stop_timer_callback, oneshot=True)
@@ -114,8 +119,7 @@ def main():
 
     try:
         rospy.init_node('image_converter', anonymous=True)
-        ic = ImageConverter()
-        ic.start_timer(5)
+        ic = ImageConverter(duration=5)
         rospy.on_shutdown(ic.shutdown)  # Register the shutdown hook
         rospy.spin()
 
