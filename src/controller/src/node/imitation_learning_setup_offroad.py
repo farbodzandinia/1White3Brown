@@ -19,7 +19,7 @@ class DataCollectorOffroad:
         self.save_directory = save_directory
         self.img_count = 0
         self.last_saved_time = rospy.Time.now()
-        self.save_interval = rospy.Duration(0.01)  # Screenshot every 0.01s
+        self.save_interval = rospy.Duration(0.001)  # Screenshot every 0.01s
 
         if not os.path.exists(self.save_directory):
             os.makedirs(self.save_directory)

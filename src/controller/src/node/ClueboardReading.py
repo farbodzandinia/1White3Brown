@@ -21,17 +21,19 @@ class ClueboardDetector:
         self.index_to_char = {index: char for char, index in self.label_dict.items()}
 
     def detect_clueboard(self, cv_image):
+        # Convert to HSV color space for easier color thresholding
+        hsv = cv2.cvtColor(cv_image, cv2.COLOR_BGR2HSV)
+
+        # Based on the image, these bounds are adjusted for a darker blue
+        # The values might still need fine-tuning
+        lower_blue = np.array([100, 150, 50])  # Lower bound for dark blue
+        upper_blue = np.array([140, 255, 255]) # Upper bound for dark blue
+
+        # Create a mask with the new bounds
+        mask = cv2.inRange(hsv, lower_blue, upper_blue)
         
-        image = cv2.cvtColor(cv_image, cv2.COLOR_BGR2GRAY)
-        image = cv2.fastNlMeansDenoising(image, None, 30, 7, 21)
-        image = cv2.adaptiveThreshold(image, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
-        laplacian = cv2.Laplacian(image, cv2.CV_64F)
-        laplacian = np.uint8(np.absolute(laplacian))
-        enhanced_image = cv2.addWeighted(image, 1.5, laplacian, -0.5, 0)
-        # Perform Canny edge detection
-        edges = cv2.Canny(enhanced_image, 50, 150)
         # Find contours in the edge-detected image
-        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         # Find the outermost contour
         if contours:
             largest_contour = max(contours, key=cv2.contourArea)
@@ -56,12 +58,18 @@ class ClueboardDetector:
 
     # Define a function to preprocess and extract letters from the detected signboard
     def preprocess_and_extract_letters(self, signboard_image):
-        
-        # Ensure signboard_image is in grayscale
-        if len(signboard_image.shape) == 3:
-            signboard_image = cv2.cvtColor(signboard_image, cv2.COLOR_BGR2GRAY)
 
-        h, w = signboard_image.shape  # Now safely unpack dimensions
+        image = cv2.cvtColor(signboard_image, cv2.COLOR_BGR2GRAY)
+        image = cv2.fastNlMeansDenoising(image, None, 30, 7, 21)
+        image = cv2.adaptiveThreshold(image, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+        laplacian = cv2.Laplacian(image, cv2.CV_64F)
+        laplacian = np.uint8(np.absolute(laplacian))
+        signboard_image = cv2.addWeighted(image, 1.5, laplacian, -0.5, 0)
+        
+        if len(signboard_image.shape) == 3:
+            h, w, _ = signboard_image.shape  # For color images
+        else:
+            h, w = signboard_image.shape  # For grayscale images
 
         category_top_crop = int(0.05 * h)  # Calculate the number of rows to crop from the top
         category_bottom_crop = int(0.65 * h)  # Calculate the number of rows to crop from the bottom

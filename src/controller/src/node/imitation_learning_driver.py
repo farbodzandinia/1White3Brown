@@ -3,6 +3,7 @@
 import rospy
 import numpy as np
 import cv2 as cv
+import time
 from sensor_msgs.msg import Image
 from geometry_msgs.msg import Twist
 from cv_bridge import CvBridge, CvBridgeError
@@ -29,6 +30,8 @@ class RobotDriver:
         self.bridge = CvBridge()
         self.current_environment = 'asphalt'
         self.pink_threshold = (np.array([145, 100, 75]), np.array([155, 255, 255]))
+        self.pink_line_count = 0
+        self.last_detection_time = 0
 
         # Subscribe to image_raw topic
         self.image_subscriber = rospy.Subscriber('/R1/pi_camera/image_raw', Image, self.image_callback)
@@ -54,40 +57,48 @@ class RobotDriver:
             mask = cv.inRange(hsv_image, self.pink_threshold[0], self.pink_threshold[1])
             mask = cv.morphologyEx(mask, cv.MORPH_OPEN, np.ones((5,5), np.uint8))
 
-            # Determine environment based on pink line detection
-            self.update_environment(cv.countNonZero(mask) > (mask.size * 0.01))
+            # Determine if pink line is detected
+            pink_line_detected = cv.countNonZero(mask) > (mask.size * 0.01)
+
+            # Get time
+            current_time = time.time()
+
+            # Check for pink line detection and cooldown
+            if pink_line_detected and (current_time - self.last_detection_time) > 0.5:
+                self.last_detection_time = current_time
+                self.update_environment()
 
             # Decide which model to use based on the current environment
-            if self.current_environment in ['desert', 'transition_to_desert']:
+            if self.current_environment == 'desert':
                 angular_z = self.predict_desert(normalized_image)
-            elif self.current_environment in ['offroad', 'transition_to_offroad']:
+            elif self.current_environment == 'offroad':
                 angular_z = self.predict_offroad(normalized_image)
             else:  # Default to asphalt
                 angular_z = self.predict_asphalt(normalized_image)
 
             # Publish the angular.z component of the Twist message
             self.publish_twist(angular_z)
+            # rospy.loginfo(self.current_environment)
 
         except CvBridgeError as e:
             rospy.logerr(f"CvBridge Error: {e}")
         except Exception as e:
             rospy.logerr(f"Unexpected error during image callback: {e}")
 
-    def update_environment(self, detected_pink_line):
-        transition_map = {
-            'asphalt': 'transition_to_desert',
-            'desert': 'transition_to_offroad',
-            'offroad': 'transition_to_desert',
-            'transition_to_desert': 'desert',
-            'transition_to_offroad': 'offroad'
-        }
-        if detected_pink_line:
-            # Move to the next environment based on current
-            self.current_environment = transition_map.get(self.current_environment, self.current_environment)
-        else:
-            # Confirm the transition if we're in one
-            if 'transition' in self.current_environment:
-                self.current_environment = transition_map.get(self.current_environment)
+    def update_environment(self):
+
+        self.pink_line_count += 1
+        rospy.loginfo("Pink line detected")
+
+        # Transition logic based on pink line count
+        if self.pink_line_count == 1:
+            self.current_environment = 'desert'
+        elif self.pink_line_count == 2:
+            self.current_environment = 'offroad'
+        elif self.pink_line_count >= 3:  # Loop back to desert on third (or more) count
+            self.current_environment = 'desert'
+
+        rospy.loginfo(f"Transitioned to {self.current_environment} environment")
 
     def predict_asphalt(self, cv_image):
         # # Preprocess the image: Resize, crop, and normalize
@@ -113,7 +124,7 @@ class RobotDriver:
         # # Extract the single output value
         # angular_z = output_data[0][0]
         # return angular_z
-
+        # rospy.loginfo('asphalt')
         prediction = self.model_asphalt.predict(cv_image[None, :, :, :])
         return prediction[0][0]
 
@@ -127,8 +138,8 @@ class RobotDriver:
 
     def publish_twist(self, angular_z):
         twist = Twist()
-        twist.linear.x = 0.5  # Linear velocity
-        twist.angular.z = angular_z * 2.25  # Scale output angular.z
+        twist.linear.x = 0.45  # Linear velocity
+        twist.angular.z = angular_z * 2.1  # Scale output angular.z
         self.twist_publisher.publish(twist)
 
     def shutdown_hook(self):
@@ -139,9 +150,9 @@ if __name__ == '__main__':
 
     rospy.init_node('robot_driver_node', anonymous=True)
     model_paths = {
-        'asphalt': 'trained_model_asphalt_2.h5',
-        'desert': 'trained_model_asphalt.h5',  # train them and change them
-        'offroad': 'trained_model_asphalt.h5'  # train them and change them
+        'asphalt': 'trained_model_asphalt_5.h5',
+        'desert': 'trained_model_desert_5.h5',
+        'offroad': 'trained_model_offroad_5.h5'
     }
     driver = RobotDriver(model_paths)
     rospy.on_shutdown(driver.shutdown_hook)
