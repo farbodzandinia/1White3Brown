@@ -22,6 +22,7 @@ class ClueboardDetector:
 
         rospy.Subscriber('/R1/pi_camera/image_raw', Image, callback)
         self.score_publisher = rospy.Publisher('/score_tracker', String, queue_size=1)
+        rospy.Subscriber('/score_tracker', String, self.score_callback)
 
         self.characters = " " + string.ascii_uppercase + string.digits
         self.label_dict = {char: i for i, char in enumerate(self.characters)}
@@ -111,6 +112,11 @@ class ClueboardDetector:
         self.interpreter.invoke()
         output_data = self.interpreter.get_tensor(self.output_details[0]['index'])
         return output_data
+
+    def score_callback(self, data):
+        # Check if the received data is "-1", indicating a shutdown signal
+        if data.data == "-1":
+            rospy.signal_shutdown("Received shutdown signal from score tracker.")
 
 # Callback function for the image subscriber
 def callback(ros_image):
