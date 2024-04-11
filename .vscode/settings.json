@@ -1,5 +1,6 @@
 {
     "cmake.configureOnOpen": true,
     "python.analysis.autoImportCompletions": true,
-    "cmake.sourceDirectory": "/home/fizzer/ros_ws/build/catkin_generated/metapackages/adeept_awr"
+    "cmake.sourceDirectory": "/home/fizzer/ros_ws/build/catkin_generated/metapackages/adeept_awr",
+    "git.ignoreLimitWarning": true
 }

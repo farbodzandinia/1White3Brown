@@ -3,156 +3,178 @@
 import rospy
 import numpy as np
 import cv2 as cv
-import time
 from sensor_msgs.msg import Image
 from geometry_msgs.msg import Twist
 from cv_bridge import CvBridge, CvBridgeError
 import tensorflow as tf
-from tensorflow.keras.models import load_model
+from gazebo_msgs.srv import SetModelState, SetModelStateRequest
+from std_msgs.msg import String
 
 class RobotDriver:
-
     def __init__(self, model_paths):
-        
-        # # Load the TFLite model and allocate tensors
-        # self.interpreter = tf.lite.Interpreter(model_path=model_path)
-        # self.interpreter.allocate_tensors()
+        """
+        Initialize the robot driver with TensorFlow Lite models for asphalt and desert environments,
+        set up ROS subscribers and publishers, and define thresholds for color detection.
+        """
+        # Load TensorFlow Lite models and allocate tensors
+        self.interpreter_asphalt = tf.lite.Interpreter(model_paths['asphalt'])
+        self.interpreter_asphalt.allocate_tensors()
 
-        # # Get input and output tensors
-        # self.input_details = self.interpreter.get_input_details()
-        # self.output_details = self.interpreter.get_output_details()
+        self.interpreter_desert = tf.lite.Interpreter(model_paths['desert'])
+        self.interpreter_desert.allocate_tensors()
 
-        # Load models
-        self.model_asphalt = load_model(model_paths['asphalt'])
-        self.model_desert = load_model(model_paths['desert'])
-        self.model_offroad = load_model(model_paths['offroad'])
+        # Get input and output details for both models
+        self.input_details_asphalt = self.interpreter_asphalt.get_input_details()
+        self.output_details_asphalt = self.interpreter_asphalt.get_output_details()
+        self.input_details_desert = self.interpreter_desert.get_input_details()
+        self.output_details_desert = self.interpreter_desert.get_output_details()
 
+        self.timer_started = False
         self.bridge = CvBridge()
         self.current_environment = 'asphalt'
+        self.teleportation_mode, self.started_teleportation = False, False
         self.pink_threshold = (np.array([145, 100, 75]), np.array([155, 255, 255]))
-        self.pink_line_count = 0
-        self.last_detection_time = 0
+        self.blue_threshold = (np.array([100, 125, 40]), np.array([140, 255, 255]))
 
-        # Subscribe to image_raw topic
+        # Dictionary with locations for teleportation
+        self.board_locations = {
+            'motive': {'x': -3.10, 'y': 1.50, 'z': 0.10, 'oz': -1.57, 'ow': 0.00},
+            'weapon': {'x': -4.04, 'y': -2.25, 'z': 0.15, 'oz': 0.00, 'ow': 0.00},
+            'bandit': {'x': -1.05, 'y': -1.20, 'z': 2.00, 'oz': 0.00, 'ow': 0.00},
+        }
+
+        # Set up ROS subscribers and publishers
         self.image_subscriber = rospy.Subscriber('/R1/pi_camera/image_raw', Image, self.image_callback)
-
-        # Publish to cmd_vel topic
         self.twist_publisher = rospy.Publisher('R1/cmd_vel', Twist, queue_size=1)
+        self.timer_publisher = rospy.Publisher('/score_tracker', String, queue_size=1)
 
-        rospy.loginfo("Driver initialized.")
+        rospy.sleep(1)  # Ensure subscribers and publishers are fully set up
+        self.timer_publisher.publish(String('1W3B,pword,0,START'))
+        self.timer_started = True
+
+        rospy.loginfo("Driver initialized. Timer started...")
 
     def image_callback(self, img_msg):
+        """
+        Callback function for image processing, driving decisions, and managing teleportation based on the detected environment.
+        """
+        # Ensure timer has started before processing the image and sending commands
+        if not self.timer_started:
+            return
+
+        # Ensure we are in teleportation mode before sending teleporation commands
+        if self.teleportation_mode:
+            if not self.started_teleportation:
+                self.start_teleportation_sequence()
+                self.started_teleportation = True
+            return
+
         try:
-            # Default value for angular.z
-            angular_z = 0
-
-            # General image preprocessing
+            # Preprocess image and detect environment
             cv_image = self.bridge.imgmsg_to_cv2(img_msg, "bgr8")
-            cv_image = cv.resize(cv_image, (128, 72))  # Resize to 128x72
-            cv_image = (cv_image[int(cv_image.shape[0] * 0.4):, :])  # Crop to the bottom 60%
-            normalized_image = cv_image / 255.0  # Normalize
-
-            # Pink line detection preprocessing
+            cv_image = cv.resize(cv_image, (128, 72))
+            normalized_image = cv_image / 255.0
             hsv_image = cv.cvtColor(cv_image, cv.COLOR_BGR2HSV)
-            mask = cv.inRange(hsv_image, self.pink_threshold[0], self.pink_threshold[1])
-            mask = cv.morphologyEx(mask, cv.MORPH_OPEN, np.ones((5,5), np.uint8))
+            mask_pink = cv.inRange(hsv_image, self.pink_threshold[0], self.pink_threshold[1])
+            mask_pink = cv.morphologyEx(mask_pink, cv.MORPH_OPEN, np.ones((5,5), np.uint8))
 
-            # Determine if pink line is detected
-            pink_line_detected = cv.countNonZero(mask) > (mask.size * 0.01)
+            # Switch environment to desert upon detecting pink
+            if cv.countNonZero(mask_pink) > (mask_pink.size * 0.01):
+                self.current_environment = 'desert'
+                rospy.loginfo("Pink line detected. Transitioning to desert...")
 
-            # Get time
-            current_time = time.time()
-
-            # Check for pink line detection and cooldown
-            if pink_line_detected and (current_time - self.last_detection_time) > 0.5:
-                self.last_detection_time = current_time
-                self.update_environment()
-
-            # Decide which model to use based on the current environment
+            angular_z = 0
             if self.current_environment == 'desert':
-                angular_z = self.predict_desert(normalized_image)
-            elif self.current_environment == 'offroad':
-                angular_z = self.predict_offroad(normalized_image)
-            else:  # Default to asphalt
-                angular_z = self.predict_asphalt(normalized_image)
+                mask_blue = cv.inRange(hsv_image, self.blue_threshold[0], self.blue_threshold[1])
+                mask_blue = cv.morphologyEx(mask_blue, cv.MORPH_OPEN, np.ones((5,5), np.uint8))
 
-            # Publish the angular.z component of the Twist message
+                if cv.countNonZero(mask_blue) > (mask_blue.size * 0.0175):
+                    self.twist_publisher.publish(Twist())
+                    self.teleportation_mode = True
+                    rospy.sleep(2)
+                    return
+                angular_z = self.predict_movement(normalized_image, 'desert')
+            else:
+                angular_z = self.predict_movement(normalized_image, 'asphalt')
+
+            # Publish movement command
             self.publish_twist(angular_z)
-            # rospy.loginfo(self.current_environment)
-
         except CvBridgeError as e:
             rospy.logerr(f"CvBridge Error: {e}")
         except Exception as e:
             rospy.logerr(f"Unexpected error during image callback: {e}")
 
-    def update_environment(self):
+    def predict_movement(self, cv_image, environment):
+        """
+        Predict the movement based on the current environment and the processed image.
+        """
+        cv_image = np.expand_dims(cv_image.astype(np.float32), axis=0)
+        interpreter = self.interpreter_asphalt if environment == 'asphalt' else self.interpreter_desert
+        input_details = interpreter.get_input_details()
+        output_details = interpreter.get_output_details()
 
-        self.pink_line_count += 1
-        rospy.loginfo("Pink line detected")
+        interpreter.set_tensor(input_details[0]['index'], cv_image)
+        interpreter.invoke()
+        output_data = interpreter.get_tensor(output_details[0]['index'])
 
-        # Transition logic based on pink line count
-        if self.pink_line_count == 1:
-            self.current_environment = 'desert'
-        elif self.pink_line_count == 2:
-            self.current_environment = 'offroad'
-        elif self.pink_line_count >= 3:  # Loop back to desert on third (or more) count
-            self.current_environment = 'desert'
-
-        rospy.loginfo(f"Transitioned to {self.current_environment} environment")
-
-    def predict_asphalt(self, cv_image):
-        # # Preprocess the image: Resize, crop, and normalize
-        # cv_image = cv.resize(cv_image, (128, 72))  # Resize to 128x72
-        # cv_image = cv_image[int(cv_image.shape[0] * 0.4):, :]  # Crop to the bottom 60%
-        # cv_image = cv_image / 255.0  # Normalize
-        
-        # # Convert the image to float32 if not already
-        # cv_image = cv_image.astype(np.float32)
-
-        # # Ensure the input is in the correct shape for the TensorFlow Lite model
-        # cv_image = np.expand_dims(cv_image, axis=0)  # Add batch dimension
-
-        # # Set the input tensor
-        # self.interpreter.set_tensor(self.input_details[0]['index'], cv_image)
-        
-        # # Run inference
-        # self.interpreter.invoke()
-
-        # # Retrieve the output from the output tensor
-        # output_data = self.interpreter.get_tensor(self.output_details[0]['index'])
-
-        # # Extract the single output value
-        # angular_z = output_data[0][0]
-        # return angular_z
-        # rospy.loginfo('asphalt')
-        prediction = self.model_asphalt.predict(cv_image[None, :, :, :])
-        return prediction[0][0]
-
-    def predict_desert(self, cv_image):
-        prediction = self.model_desert.predict(cv_image[None, :, :, :])
-        return prediction[0][0]
-
-    def predict_offroad(self, cv_image):
-        prediction = self.model_offroad.predict(cv_image[None, :, :, :])
-        return prediction[0][0]
+        return output_data[0][0]
 
     def publish_twist(self, angular_z):
+        """
+        Publishes the Twist message to control the robot's movement.
+        """
         twist = Twist()
-        twist.linear.x = 0.45  # Linear velocity
-        twist.angular.z = angular_z * 2.1  # Scale output angular.z
+        twist.linear.x = 0.3645
+        twist.angular.z = angular_z
         self.twist_publisher.publish(twist)
 
+    def spawn_robot(self, x, y, z, oz, ow):
+        """
+        Teleport the robot to a specified location.
+        """
+        msg = SetModelStateRequest()
+        msg.model_state.model_name = 'R1'
+        msg.model_state.pose.position.x = x
+        msg.model_state.pose.position.y = y
+        msg.model_state.pose.position.z = z
+        msg.model_state.pose.orientation.z = oz
+        msg.model_state.pose.orientation.w = ow
+
+        try:
+            rospy.wait_for_service('/gazebo/set_model_state')
+            set_state = rospy.ServiceProxy('/gazebo/set_model_state', SetModelState)
+            set_state(msg)
+        except rospy.ServiceException as e:
+            rospy.logerr(e)
+
+    def start_teleportation_sequence(self):
+        """
+        Initiates the teleportation sequence to the defined board locations, ends the timer, and shuts down the node.
+        """
+        rospy.loginfo("Starting teleportation sequence...")
+        for name, location in self.board_locations.items():
+            rospy.loginfo(f"Teleporting to {name}...")
+            self.spawn_robot(**location)
+            rospy.sleep(2)  # Wait between teleportations for visibility
+        rospy.loginfo("Teleportation sequence completed.")
+        self.timer_publisher.publish(String('1W3B,password,-1,STOP'))
+        rospy.loginfo("Timer ended. Shutting down the node...")
+
+        # Shut down the ROS node
+        rospy.signal_shutdown("Completed teleportation sequence and ended timer.")
+
     def shutdown_hook(self):
-        self.twist_publisher.publish(Twist())  # Stop robot
+        """
+        Cleans up when the ROS node is shutting down.
+        """
+        self.twist_publisher.publish(Twist())
         rospy.loginfo("RobotDriver shutdown.")
 
 if __name__ == '__main__':
-
     rospy.init_node('robot_driver_node', anonymous=True)
     model_paths = {
-        'asphalt': 'trained_model_asphalt_5.h5',
-        'desert': 'trained_model_desert_5.h5',
-        'offroad': 'trained_model_offroad_5.h5'
+        'asphalt': 'trained_model_asphalt_weight_quantized.tflite',
+        'desert': 'trained_model_desert_weight_quantized.tflite'
     }
     driver = RobotDriver(model_paths)
     rospy.on_shutdown(driver.shutdown_hook)
