@@ -9,10 +9,10 @@ from cv_bridge import CvBridge, CvBridgeError
 import string
 import tensorflow as tf
 
-# Define the ClueboardDetector class
-class ClueboardDetector:
+# Define the ClueboardReader class
+class ClueboardReader:
     def __init__(self):
-        self.interpreter = tf.lite.Interpreter(model_path='quantized_model.tflite')
+        self.interpreter = tf.lite.Interpreter(model_path='clueboard_reader_quantized_model.tflite.')
         self.interpreter.allocate_tensors()
 
         self.input_details = self.interpreter.get_input_details()
@@ -22,6 +22,7 @@ class ClueboardDetector:
 
         rospy.Subscriber('/R1/pi_camera/image_raw', Image, callback)
         self.score_publisher = rospy.Publisher('/score_tracker', String, queue_size=1)
+        rospy.Subscriber('/score_tracker', String, self.score_callback)
 
         self.characters = " " + string.ascii_uppercase + string.digits
         self.label_dict = {char: i for i, char in enumerate(self.characters)}
@@ -60,12 +61,11 @@ class ClueboardDetector:
                     matrix = cv2.getPerspectiveTransform(pts1, pts2)
                     signboard_transformed = cv2.warpPerspective(cv_image, matrix, (signboard_width, signboard_height))
                     return signboard_transformed
-                else:
-                    return None 
+
         return None  # Return None if no signboard is detected
 
     def shutdown_hook(self):
-        rospy.loginfo("ClueboardDetector shutdown.")
+        rospy.loginfo("ClueboardReader shutdown.")
 
     # Define a function to preprocess and extract letters from the detected signboard
     def preprocess_and_extract_letters(self, signboard_image):
@@ -112,6 +112,11 @@ class ClueboardDetector:
         output_data = self.interpreter.get_tensor(self.output_details[0]['index'])
         return output_data
 
+    def score_callback(self, data):
+        # Check if the received data is "-1", indicating a shutdown signal
+        if data.data == "-1":
+            rospy.signal_shutdown("Received shutdown signal from score tracker.")
+
 # Callback function for the image subscriber
 def callback(ros_image):
     try:
@@ -121,7 +126,7 @@ def callback(ros_image):
         rospy.logerr(e)
         return
 
-    # Instantiate the ClueboardDetector and detect the signboard in the image
+    # Instantiate the ClueboardReader and detect the signboard in the image
     signboard_image = detect.detect_clueboard(cv_image)
 
     if signboard_image is not None:
@@ -194,12 +199,12 @@ def order_points(pts):
 if __name__ == '__main__':
 
     # Initialize the ROS node
-    rospy.init_node('clue_detection', anonymous=True)
-    detect = ClueboardDetector()
+    rospy.init_node('clueboard_reader', anonymous=True)
+    detect = ClueboardReader()
 
     rospy.on_shutdown(detect.shutdown_hook)
 
     try:
         rospy.spin()
     except KeyboardInterrupt:
-        rospy.loginfo("Shutting down ClueboardDetector node.")
+        rospy.loginfo("Shutting down ClueboardReader node.")

@@ -38,9 +38,8 @@ class RobotDriver:
 
         # Dictionary with locations for teleportation
         self.board_locations = {
-            'motive': {'x': -3.10, 'y': 1.50, 'z': 0.10, 'oz': -1.57, 'ow': 0.00},
-            'weapon': {'x': -4.04, 'y': -2.25, 'z': 0.15, 'oz': 0.00, 'ow': 0.00},
-            'bandit': {'x': -1.05, 'y': -1.20, 'z': 2.00, 'oz': 0.00, 'ow': 0.00},
+            'offroad_pink': {'x': -3.90, 'y': 0.50, 'z': 0.10, 'oz': 0.50, 'ow': -0.28},
+            'weapon_clueboard': {'x': -4.04, 'y': -2.25, 'z': 0.15, 'oz': 0.00, 'ow': 0.00}
         }
 
         # Set up ROS subscribers and publishers
@@ -88,7 +87,7 @@ class RobotDriver:
                 mask_blue = cv.inRange(hsv_image, self.blue_threshold[0], self.blue_threshold[1])
                 mask_blue = cv.morphologyEx(mask_blue, cv.MORPH_OPEN, np.ones((5,5), np.uint8))
 
-                if cv.countNonZero(mask_blue) > (mask_blue.size * 0.0175):
+                if cv.countNonZero(mask_blue) > (mask_blue.size * 0.0165):
                     self.twist_publisher.publish(Twist())
                     self.teleportation_mode = True
                     rospy.sleep(2)
@@ -148,20 +147,30 @@ class RobotDriver:
             rospy.logerr(e)
 
     def start_teleportation_sequence(self):
-        """
-        Initiates the teleportation sequence to the defined board locations, ends the timer, and shuts down the node.
-        """
         rospy.loginfo("Starting teleportation sequence...")
         for name, location in self.board_locations.items():
             rospy.loginfo(f"Teleporting to {name}...")
             self.spawn_robot(**location)
-            rospy.sleep(2)  # Wait between teleportations for visibility
+            
+            # Check if the current location is offroad_pink
+            if name == 'offroad_pink':
+                # Drive straight back for 3 seconds
+                reverse_twist = Twist()
+                reverse_twist.linear.x = -0.525  # Adjust speed as necessary
+                self.twist_publisher.publish(reverse_twist)
+                rospy.sleep(3)
+                
+                # Stop the robot
+                self.twist_publisher.publish(Twist())
+            
+            rospy.sleep(5)  # Wait between teleportations for visibility
         rospy.loginfo("Teleportation sequence completed.")
         self.timer_publisher.publish(String('1W3B,password,-1,STOP'))
         rospy.loginfo("Timer ended. Shutting down the node...")
 
         # Shut down the ROS node
         rospy.signal_shutdown("Completed teleportation sequence and ended timer.")
+
 
     def shutdown_hook(self):
         """
